@@ -1,4 +1,4 @@
-import React, { useState, useEffect, Suspense } from 'react'
+import React, { useState, useEffect, useRef, Suspense } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { ref, onValue, update } from 'firebase/database'
 import { db } from './firebase'
@@ -15,12 +15,16 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true)
   const [activeTab, setActiveTab] = useState('history')
 
+  // 🛡️ Flag และ Ref สำหรับป้องกันการรับคำสั่งเก่าตอนเปิดหน้าเว็บ
+  const isInitialLoadRef = useRef(true)
+  const lastProcessedTimeRef = useRef(null)
+
   // 🎮 Mini-Game States
   const [gameState, setGameState] = useState('IDLE') // 'IDLE', 'PLAYING', 'FINISHED'
   const [hitHoops, setHitHoops] = useState([])
   const [timeElapsed, setTimeElapsed] = useState(0)
   const [leaderboard, setLeaderboard] = useState([])
-  const [playerName, setPlayerName] = useState('Guest') // กำหนดชื่อ Default
+  const [playerName, setPlayerName] = useState('Guest')
 
   const [mapping, setMapping] = useState({
     left: 'L',
@@ -48,7 +52,7 @@ export default function App() {
     return () => clearInterval(interval)
   }, [gameState])
 
-  // รับข้อมูลจาก Firebase
+  // 📡 รับข้อมูลจาก Firebase พร้อมระบบป้องกันการรับคำสั่งเก่าตกค้าง
   useEffect(() => {
     const deviceRef = ref(db, 'iot_device')
 
@@ -56,8 +60,20 @@ export default function App() {
         if (snapshot.exists()) {
           const data = snapshot.val()
           const rawCmd = String(data.command || 'IDLE')
+          const lastUpdated = data.last_updated
 
-          if (rawCmd && rawCmd !== 'IDLE') {
+          // 1. ครั้งแรกที่เปิดหน้าเว็บขึ้นมา ให้บันทึกเวลาอัปเดตล่าสุดไว้ แล้วข้ามการทำคำสั่งเก่าทันที
+          if (isInitialLoadRef.current) {
+            isInitialLoadRef.current = false
+            lastProcessedTimeRef.current = lastUpdated
+            setStatus('Ready')
+            return
+          }
+
+          // 2. ทำงานเฉพาะเมื่อมีคำสั่งใหม่เข้ามาจริง (เวลาอัปเดตต้องใหม่กว่าครั้งก่อน)
+          if (rawCmd && rawCmd !== 'IDLE' && lastUpdated && lastUpdated !== lastProcessedTimeRef.current) {
+            lastProcessedTimeRef.current = lastUpdated
+
             const uppercaseCmd = rawCmd.trim().toUpperCase()
             
             let mappedCmd = 'IDLE'
@@ -77,6 +93,11 @@ export default function App() {
               { id: `${Date.now()}-${Math.random()}`, raw: rawCmd, cmd: mappedCmd, time: timeStr },
               ...prev.slice(0, 49)
             ])
+
+            // เคลียร์คำสั่งบน UI กลับเป็น IDLE หลังประมวลผลเสร็จ
+            setTimeout(() => {
+              setCommandEvent({ cmd: 'IDLE', timestamp: Date.now() })
+            }, 300)
           }
         } else {
           setStatus('Ready')
@@ -120,12 +141,15 @@ export default function App() {
     setHitHoops([])
     setTimeElapsed(0)
     setCommandEvent({ cmd: 'RESET_TURRET', timestamp: Date.now() })
+    setTimeout(() => {
+      setCommandEvent({ cmd: 'IDLE', timestamp: Date.now() })
+    }, 300)
   }
 
   const saveScore = () => {
     const finalName = playerName.trim() || 'Anonymous'
     const newScore = { name: finalName, time: timeElapsed.toFixed(1), date: new Date().toLocaleString('th-TH') }
-    const newLb = [...leaderboard, newScore].sort((a, b) => parseFloat(a.time) - parseFloat(b.time)).slice(0, 5) // เก็บแค่ Top 5
+    const newLb = [...leaderboard, newScore].sort((a, b) => parseFloat(a.time) - parseFloat(b.time)).slice(0, 5)
     setLeaderboard(newLb)
     localStorage.setItem('rally_leaderboard', JSON.stringify(newLb))
     
@@ -211,10 +235,8 @@ export default function App() {
         </div>
       </div>
 
-      {/* ✅ Mini-Game HUD & Leaderboard (Top Right) */}
+      {/* Mini-Game HUD & Leaderboard */}
       <div style={{ position: 'absolute', top: 20, right: 20, zIndex: 90, display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'flex-end', width: '280px' }}>
-        
-        {/* Score & Time */}
         <div style={{ backgroundColor: 'rgba(22, 27, 34, 0.85)', backdropFilter: 'blur(8px)', padding: '12px 20px', borderRadius: '16px', border: '1px solid #30363d', display: 'flex', gap: 20, alignItems: 'center', width: '100%', justifyContent: 'center' }}>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
             <span style={{ fontSize: '11px', color: '#8b949e', fontWeight: 'bold', textTransform: 'uppercase' }}>Targets Hit</span>
@@ -231,13 +253,11 @@ export default function App() {
           </div>
         </div>
         
-        {/* Firebase Status */}
         <div style={{ backgroundColor: 'rgba(22, 27, 34, 0.85)', padding: '6px 12px', borderRadius: '20px', border: '1px solid #30363d', display: 'flex', alignItems: 'center', gap: 8, color: '#fff', fontSize: '12px', width: '100%', justifyContent: 'center' }}>
           <Wifi size={14} color={status === 'Online' ? '#00ff88' : '#ffaa00'} />
           <span>Path: <strong style={{ color: '#00ff88' }}>iot_device/command</strong></span>
         </div>
 
-        {/* ✅ Leaderboard Panel */}
         {leaderboard.length > 0 && (
           <div style={{ backgroundColor: 'rgba(22, 27, 34, 0.85)', backdropFilter: 'blur(8px)', padding: '12px 16px', borderRadius: '16px', border: '1px solid #30363d', width: '100%' }}>
             <div style={{ fontSize: '11px', color: '#8b949e', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -256,7 +276,7 @@ export default function App() {
         )}
       </div>
 
-      {/* ✅ ป็อปอัปเวลาชนะเกม (กรอกชื่อได้) */}
+      {/* ป็อปอัปเวลาชนะเกม */}
       {gameState === 'FINISHED' && (
         <div style={{ position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.8)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div style={{ backgroundColor: '#161b22', padding: '40px', borderRadius: '24px', border: '1px solid #30363d', textAlign: 'center', maxWidth: '400px', width: '100%', boxShadow: '0 10px 40px rgba(0,0,0,0.5)' }}>
@@ -265,7 +285,6 @@ export default function App() {
             <p style={{ color: '#8b949e', fontSize: '16px', margin: '0 0 20px 0' }}>You destroyed all 3 targets in</p>
             <div style={{ fontSize: '48px', fontWeight: 'bold', color: '#00ff88', marginBottom: '30px' }}>{timeElapsed.toFixed(1)}s</div>
             
-            {/* Input สำหรับกรอกชื่อ */}
             <div style={{ marginBottom: '20px', textAlign: 'left' }}>
               <label style={{ color: '#8b949e', fontSize: '12px', textTransform: 'uppercase', fontWeight: 'bold', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <User size={14} /> Player Name
@@ -280,7 +299,7 @@ export default function App() {
             </div>
 
             <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
-              <button onClick={() => { startGame(); setCommandEvent({ cmd: 'RESET_CAMERA', timestamp: Date.now() }) }} style={{ ...popupBtn, backgroundColor: '#21262d', color: '#fff', flex: 1 }}>Play Again</button>
+              <button onClick={() => { startGame(); setCommandEvent({ cmd: 'RESET_CAMERA', timestamp: Date.now() }); setTimeout(() => setCommandEvent({ cmd: 'IDLE', timestamp: Date.now() }), 300); }} style={{ ...popupBtn, backgroundColor: '#21262d', color: '#fff', flex: 1 }}>Play Again</button>
               <button onClick={saveScore} style={{ ...popupBtn, backgroundColor: '#00d2ff', color: '#0f1117', flex: 1 }}>Save Score</button>
             </div>
           </div>
@@ -295,9 +314,12 @@ export default function App() {
         </div>
       </div>
 
-      {/* ปุ่ม Reset Camera (ซ้ายล่าง) */}
+      {/* ปุ่ม Reset Camera */}
       <button 
-        onClick={() => setCommandEvent({ cmd: 'RESET_CAMERA', timestamp: Date.now(), rand: Math.random() })}
+        onClick={() => {
+          setCommandEvent({ cmd: 'RESET_CAMERA', timestamp: Date.now(), rand: Math.random() })
+          setTimeout(() => setCommandEvent({ cmd: 'IDLE', timestamp: Date.now() }), 300)
+        }}
         style={{ position: 'absolute', bottom: 25, left: 20, zIndex: 90, backgroundColor: 'rgba(22, 27, 34, 0.85)', backdropFilter: 'blur(8px)', padding: '14px 20px', borderRadius: '16px', border: '1px solid #30363d', color: '#c9d1d9', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontWeight: 'bold' }}>
         <Camera size={18} color="#00d2ff" /> Reset Camera
       </button>
@@ -314,7 +336,10 @@ export default function App() {
           <button onClick={() => sendTestCommand(mapping.right)} style={btnStyle}><ArrowRight size={16} /></button>
           <div></div>
           <button onClick={() => sendTestCommand(mapping.down)} style={btnStyle}><ArrowDown size={16} /></button>
-          <button onClick={() => setCommandEvent({ cmd: 'RESET_TURRET', timestamp: Date.now(), rand: Math.random() })} style={btnStyle} title="Reset Gun Rotation"><RotateCcw size={16} /></button>
+          <button onClick={() => {
+            setCommandEvent({ cmd: 'RESET_TURRET', timestamp: Date.now(), rand: Math.random() })
+            setTimeout(() => setCommandEvent({ cmd: 'IDLE', timestamp: Date.now() }), 300)
+          }} style={btnStyle} title="Reset Gun Rotation"><RotateCcw size={16} /></button>
         </div>
         {gameState === 'IDLE' && (
           <button onClick={startGame} style={{ ...btnStyle, gridColumn: 'span 3', marginTop: '4px', backgroundColor: '#00d2ff', color: '#0f1117', fontWeight: 'bold' }}>

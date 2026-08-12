@@ -4,6 +4,28 @@ import { useGLTF, OrbitControls, Environment, ContactShadows } from '@react-thre
 import * as THREE from 'three'
 
 // ==========================================
+// 🔴 จุดบอกตำแหน่งตกล่าสุดบนพื้น (Impact Marker)
+// ==========================================
+function ImpactMarker({ position }) {
+  if (!position) return null
+
+  return (
+    <group position={[position.x, -1.5, position.z]}>
+      {/* วงกลมพื้นเรืองแสง */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]}>
+        <ringGeometry args={[0.6, 0.9, 32]} />
+        <meshBasicMaterial color="#ff0055" transparent opacity={0.8} side={THREE.DoubleSide} />
+      </mesh>
+      {/* จุดศูนย์กลาง */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 0]}>
+        <circleGeometry args={[0.3, 32]} />
+        <meshBasicMaterial color="#ff3366" transparent opacity={0.9} side={THREE.DoubleSide} />
+      </mesh>
+    </group>
+  )
+}
+
+// ==========================================
 // 🌟 Particle Effect (เมื่อยิงเข้าห่วง)
 // ==========================================
 function ScoreEffect({ position, onComplete }) {
@@ -118,6 +140,9 @@ export default function Turret3D({ commandEvent, onScore }) {
 
   const [projectiles, setProjectiles] = useState([])
   const [effects, setEffects] = useState([])
+  
+  // 📍 Default เป็น null (ไม่แสดงจุดตกล่าสุดจนกว่าจะมีการยิงตกพื้นจริงๆ)
+  const [lastImpactPos, setLastImpactPos] = useState(null)
 
   const hoopsData = [
     { id: 1, pos: new THREE.Vector3(20, 5.0, -12.5), radius: 3.5 }, // A: ซ้ายสุด (Scale 1.5)
@@ -143,7 +168,6 @@ export default function Turret3D({ commandEvent, onScore }) {
       targetYaw.current = 0
       targetPitch.current = 0
     } else if (cmd === 'RESET_CAMERA') {
-      // ✅ ดึงกล้องกลับไปมุม Default (หลังปืน)
       if (controlsRef.current) {
         controlsRef.current.object.position.set(-45, 15, 0)
         controlsRef.current.target.set(0, 0, 0)
@@ -161,7 +185,8 @@ export default function Turret3D({ commandEvent, onScore }) {
     const direction = new THREE.Vector3(0, 0, 1)
     direction.transformDirection(muzzleRef.current.matrixWorld).normalize()
 
-    const speed = 0.48
+    // 🚀 ตั้งค่า speed = 32 ตามที่กำหนด
+    const speed = 32.0
     const yaw = targetYaw.current
     const pitch = targetPitch.current
 
@@ -186,17 +211,22 @@ export default function Turret3D({ commandEvent, onScore }) {
       pitchRef.current.rotation.x = THREE.MathUtils.lerp(pitchRef.current.rotation.x, -targetPitch.current, 0.15)
     }
 
-    const gravity = 0.4 
+    // 🚀 ตั้งค่า gravity = 18 ตามที่กำหนด
+    const gravity = 18.0 
+
     setProjectiles((prev) =>
       prev
         .map((p) => {
           if (p.scored) return p 
 
+          // 1. คำนวณความเร็วแกน Y ใหม่ด้วย Delta Time
           const newVy = p.velocity[1] - gravity * delta
+
+          // 2. คำนวณตำแหน่งใหม่โดยคูณ delta ทุกแกน ($v \times \Delta t$)
           const newPos = [
-            p.position[0] + p.velocity[0],
-            p.position[1] + newVy,
-            p.position[2] + p.velocity[2]
+            p.position[0] + p.velocity[0] * delta,
+            p.position[1] + newVy * delta,
+            p.position[2] + p.velocity[2] * delta
           ]
           
           const currentPitch = Math.atan2(newVy, Math.hypot(p.velocity[0], p.velocity[2]))
@@ -207,10 +237,14 @@ export default function Turret3D({ commandEvent, onScore }) {
             if (currentVec.distanceTo(hoop.pos) < hoop.radius) {
               hasScored = true
               setEffects(e => [...e, { id: Date.now(), pos: [hoop.pos.x, hoop.pos.y, hoop.pos.z] }])
-              // ✅ ส่งสัญญาณกลับไปบอก App ว่ายิงเข้าห่วงไหน
               if (onScore) onScore(hoop.id)
             }
           })
+
+          // 📍 แสดงจุดตกเฉพาะกรณีที่ไม่เข้าห่วง (hasScored === false) และตกกระทบพื้น (Y <= -1.5)
+          if (!hasScored && newPos[1] <= -1.5) {
+            setLastImpactPos(new THREE.Vector3(newPos[0], -1.5, newPos[2]))
+          }
 
           return {
             ...p,
@@ -257,7 +291,7 @@ export default function Turret3D({ commandEvent, onScore }) {
       )}
 
       {/* ห่วงบาส */}
-      <BasketballHoopA position={[20, -1.25, -12]} rotation={[0,3.4, 0]} /> 
+      <BasketballHoopA position={[20, -1.25, -12]} rotation={[0, 3.4, 0]} /> 
       <BasketballHoopB position={[33, -1.25, 0]}     rotation={[0, -Math.PI, 0]} /> 
       <BasketballHoopC position={[4.6, -1.25, 15.5]}  rotation={[0, -3.55, 0]} /> 
       
@@ -275,8 +309,12 @@ export default function Turret3D({ commandEvent, onScore }) {
         </group>
       </group>
 
+      {/* แสดงลูกขนไก่ & เอฟเฟกต์ */}
       <Projectiles projectiles={projectiles} />
       {effects.map(e => <ScoreEffect key={e.id} position={e.pos} onComplete={() => removeEffect(e.id)} />)}
+
+      {/* 🔴 แสดงจุดตกล่าสุดบนพื้น (ไม่แสดงถ้ายิงลงห่วง หรือยังไม่เคยยิง) */}
+      <ImpactMarker position={lastImpactPos} />
 
       <ContactShadows position={[0, -1.49, 0]} opacity={0.6} scale={30} blur={1.5} far={1.5} />
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -1.53, 0]} receiveShadow>
