@@ -20,7 +20,7 @@ export default function App() {
   const [hitHoops, setHitHoops] = useState([])
   const [timeElapsed, setTimeElapsed] = useState(0)
   const [leaderboard, setLeaderboard] = useState([])
-  const [playerName, setPlayerName] = useState('Jirat Panunta') // กำหนดชื่อ Default
+  const [playerName, setPlayerName] = useState('Guest') // กำหนดชื่อ Default
 
   const [mapping, setMapping] = useState({
     left: 'L',
